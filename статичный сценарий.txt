@@ -1,0 +1,347 @@
+//light1.js 
+//'use strict';
+var grow_box = "test1"; // CHANGE_ME! имя устройства. Выводится в заголовок окна и служит для разделения устройств
+log.info("light_"+grow_box+"START######################"); //Это лог.
+
+var dimmer_light = "wb-dac/EXT1_O1"; // CHANGE_ME! устройство-диммер То есть строка, которая определяет куда писать изменения мощности.
+var dimmer_zeroValue = 0; //"0" диммера
+var dimmer_maxValue = 10000; //100% диммера
+
+var dimmer_relay = "wb-mr6cu_29/K1"; //CHANGE_ME! устройство-реле питания диммера (доработка, используемй диммер подтягивает свой вход к VCC)
+
+var ps = new PersistentStorage("storage_"+grow_box, {global: true});// Определим объект-хранилище.
+
+var sunraiseStartTime; //Время начала "рассвета"
+var sunraiseStopTime; //Время конца "рассвета"
+var sunsetStartTime;//Время начала "заката"
+var sunsetStopTime; //Длительность "заката"
+var light_increment = 0; //Глобальная для хранения приращения освещенности
+var setPointLight = (((ps["light_setpoint"])-1)*100).toString(); // уставка освещенности
+//var dimmer_increment = (dimmer_maxValue-dimmer_zeroValue)/400; //увеличение освещения в цикл расчетное на 0.25%
+var dimmer_increment = 100; //увеличение освещения в цикл 1%
+setTimeVariable();
+
+//Элементы виртуального устройства
+//управления
+var deviceCells = { 
+  "Lamp power set" : {
+    type : "range",
+    value : dimmer_zeroValue,
+    min : dimmer_zeroValue,
+    max : dimmer_maxValue
+  },
+  //Начало рассвета hh:mm
+  "Sunraise (start) time": {
+    type: "text",
+    readonly: false,
+    value: ps["sun_start_time"],
+  },
+  //Длительность рассвета
+  "Sunraise duration": {
+    type: "text",
+    readonly: false,
+    value: ps["sun_start_duration"],
+  },
+  //Начало заката hh:mm
+  "Sunset (stop) time": {
+    type: "text",
+    readonly: false,
+    value: ps["sun_stop_time"],
+  },
+  //Длительность заката
+  "Sunset duration": {
+    type: "text",
+    readonly: false,
+    value: ps["sun_stop_duration"],
+  },
+  "Light SetPoint": {
+    type: "value",
+    readonly: false,
+    value: ps["light_setpoint"]
+  },
+  sunraiseProcess : {
+          type : "switch",
+          value : false,
+  },   
+  sunsetProcess : {
+          type : "switch",
+          value : false,
+  },
+  dayProcess : {
+          type : "switch",
+          value : false,
+  },
+};
+
+
+
+//Создадим виртуальное устройство и добавим в него элементы 
+  defineVirtualDevice("light_"+grow_box, {
+    title:"Light of "+grow_box,
+    cells: deviceCells
+  });
+
+defineRule("Sunraise start time change", { //название правила 
+whenChanged: "light_"+grow_box+"/Sunraise (start) time", //при изменении поля времени начала рассвета запишем его в хранилище
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    log.info("light_"+grow_box+"/Sunraise start time ", newValue); //Это лог. Он попадает в /var/log/messages
+    ps["sun_start_time"] = newValue;
+    setTimeVariable();
+  }
+});
+
+defineRule("Sunraise duration change", { //название правила 
+whenChanged: "light_"+grow_box+"/Sunraise duration", //при изменении поля времени рассвета запишем его в хранилище
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    log.info("light_"+grow_box+"/Sunraise duration", newValue); //Это лог. Он попадает в /var/log/messages
+    ps["sun_start_duration"] = newValue;
+    setTimeVariable();
+  }
+});
+
+defineRule("Sunset start time change", { //название правила 
+whenChanged: "light_"+grow_box+"/Sunset (stop) time", //при изменении поля времени начала ЗАКАТА запишем его в хранилище
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    log.info("light_"+grow_box+"/Sunset (stop) time ", newValue); //Это лог. Он попадает в /var/log/messages
+    ps["sun_stop_time"] = newValue;
+    setTimeVariable();
+  }
+});
+
+defineRule("Sunset duration change", { //название правила 
+whenChanged: "light_"+grow_box+"/Sunset duration", //при изменении поля времени заката запишем его в хранилище
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    log.info("light_"+grow_box+"/Sunset duration", newValue); //Это лог. Он попадает в /var/log/messages
+    ps["sun_stop_duration"] = newValue;
+    setTimeVariable();
+  }
+});
+
+defineRule("Light SetPoint change", { //название правила 
+whenChanged: "light_"+grow_box+"/Light SetPoint", //при уставки желаемой освещенности -запишем в хранилище
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    log.info("light_"+grow_box+"/light_setpoint ", newValue); //Это лог. Он попадает в /var/log/messages
+    ps["light_setpoint"] = ((newValue-1)*100).toString();
+    setPointLight = ((newValue-1)*100).toString();
+  }
+});
+defineRule("dayProcess change", { //название правила 
+whenChanged: "light_"+grow_box+"/dayProcess", // Для режима "День"
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    if (newValue){ //Включаем "день"
+    //log.info("light_"+grow_box+"/light_setpoint ", newValue); //Это лог. Он попадает в /var/log/messages
+      dev["light_"+grow_box+"/sunraiseProcess"] = false; //Выключаем "рассвет" Таймер остановит правило "SunRaise_starter"
+      //dev["light_"+grow_box+"/sunsetProcess"] = false; //Выключаем "закат" Таймер остановит правило "SunSet_starter"
+      setPointLight = Number(ps["light_setpoint"]); // уставка освещенности
+    }else{
+      //dev[dimmer_light] = dimmer_zeroValue;
+    }
+  }
+});
+//*Дополнение для реле диммера
+defineRule("dimmer_relay_on", { //название правила 
+whenChanged: "light_"+grow_box+"/Lamp power set", //При изменении мощности диммера - проверим и включим реле
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+  if ((newValue>dimmer_zeroValue)&&(dev[dimmer_relay] == false)){ //Если диммер уже включен а реле выключено
+    dev[dimmer_relay] = true; //включаем реле
+  }
+}
+});  
+defineRule("dimmer_relay_off", { //название правила 
+whenChanged: "light_"+grow_box+"/sunsetProcess", //При изменении флага "закат" - проверим и выключим реле
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    
+   if ((newValue<=dimmer_zeroValue)&&(dev[dimmer_relay] == true)&&(dev["light_"+grow_box]["sunraiseProcess"] == false)&&(dev["light_"+grow_box]["sunsetProcess"] == false)){ //Если диммер на минимуме а реле включено
+    dev[dimmer_relay] = false;
+  }
+}
+});  
+//*Конец дополнения
+
+//* Статический сценарий
+
+defineRule("start change", { //название правила 
+whenChanged: "light_"+grow_box+"/sunraiseProcess", //При изменении флага "рассвет" - установим значения виртуального устройства.
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    if ((dev["light_"+grow_box]["sunraiseProcess"]==true)){// если сейчас нужен свет
+      newValue = Number(newValue); //Приведем к числу
+      if (newValue>setPointLight) { // Если текущая освещенность 0
+        //log.info("light_"+grow_box+"Light_measured BIG",newValue);
+        if (dev[dimmer_light]<dimmer_maxValue){
+          dev[dimmer_light] += dimmer_increment;
+        }
+      }
+      dev["light_"+grow_box+"/Lamp power set"] = dev[dimmer_light];
+    }
+  }
+});
+
+defineRule("start_sunraise change", { //название правила 
+whenChanged: "light_"+grow_box+"/sunraiseProcess", //При изменении флага "рассвет" - установим значения виртуального устройства.
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    dev["light_"+grow_box]["dimmer_light"] = newValue;
+    if ((dev["light_"+grow_box]["sunraiseProcess"]==true)){// если сейчас нужен свет
+      newValue = Number(newValue); //Приведем к числу
+        if (dev[dimmer_light]=0){
+          dev[dimmer_light] += dimmer_increment;
+      }
+      dev["light_"+grow_box+"/Lamp power set"] = dev[dimmer_light];
+    }
+  }
+});
+defineRule("start_sunset change", { //название правила 
+whenChanged: "light_"+grow_box+"/sunsetProcess", //При изменении флага "закат" - установим значения виртуального устройства.
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    dev["light_"+grow_box]["dimmer_light"] = newValue;
+    if ((dev["light_"+grow_box]["sunraiseProcess"]==true)||(dev["light_"+grow_box]["dayProcess"]==true)||(dev["light_"+grow_box]["sunsetProcess"]==true)){// если сейчас нужен свет
+      newValue = Number(newValue); //Приведем к числу
+      if (newValue>setPointLight) { // Если текущая освещенность больше уставки
+        //log.info("light_"+grow_box+"Light_measured BIG",newValue);
+        if (dev[dimmer_light]>dimmer_zeroValue){
+          dev[dimmer_light] -= dimmer_increment;
+        }
+      } else{ // если меньше
+        //log.info("light_"+grow_box+"Light_measured LOW",newValue);
+        if (dev[dimmer_light]<dimmer_maxValue){
+          dev[dimmer_light] += dimmer_increment;
+        }
+      }
+      dev["light_"+grow_box+"/Lamp power set"] = dev[dimmer_light];
+    }
+  }
+});
+defineRule("start_day change", { //название правила 
+whenChanged: dimmer_light, //При изменении флага "день" - установим значения виртуального устройства.
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    dev["light_"+grow_box]["dimmer_light"] = newValue;
+    if ((dev["light_"+grow_box]["sunraiseProcess"]==true)||(dev["light_"+grow_box]["dayProcess"]==true)||(dev["light_"+grow_box]["sunsetProcess"]==true)){// если сейчас нужен свет
+      newValue = Number(newValue); //Приведем к числу
+      if (newValue>setPointLight) { // Если текущая освещенность больше уставки
+        //log.info("light_"+grow_box+"Light_measured BIG",newValue);
+        if (dev[dimmer_light]>dimmer_zeroValue){
+          dev[dimmer_light] -= dimmer_increment;
+        }
+      } else{ // если меньше
+        //log.info("light_"+grow_box+"Light_measured LOW",newValue);
+        if (dev[dimmer_light]<dimmer_maxValue){
+          dev[dimmer_light] += dimmer_increment;
+        }
+      }
+      dev["light_"+grow_box+"/Lamp power set"] = dev[dimmer_light];
+    }
+  }
+});
+
+
+//* Окончание статического сценария
+
+defineRule("cron minute timer", { //Просто задание, которое выполняется каждую минуту и взводит/опускает флаги "Рассвет", "Закат"
+  when: cron("00 * * * * *"),
+  then: function () {
+    //log.info(grow_box, "cron timer executed! DEBUG ONLY.");
+    d = new Date(); //Текущее время
+    //sunraiseStartTime 
+    if ((dev["light_"+grow_box]["sunraiseProcess"]==false) && (d > sunraiseStartTime) && (d<sunraiseStopTime)){
+      log.info(grow_box, "cron timer executed! Sunraise process START", "sunraiseStartTime",sunraiseStartTime ,"sunraiseStopTime",sunraiseStopTime);
+      dev["light_"+grow_box]["sunraiseProcess"] = true;
+    }
+    //sunsetStartTime
+    if ((dev["light_"+grow_box]["sunsetProcess"]==false) && (d > sunsetStartTime) && (d<sunsetStopTime)){
+      log.info(grow_box, "cron timer executed! SunSET process START", "sunsetStartTime",sunsetStartTime ,"sunsetStopTime",sunsetStopTime);
+      dev["light_"+grow_box]["sunsetProcess"] = true;
+    }
+    //dayProcess
+    if ((dev["light_"+grow_box]["dayProcess"]==false) && (d > sunraiseStopTime) && (d<sunsetStartTime)){
+      log.info(grow_box, "cron timer executed! DAY process START","sunraiseStopTime",sunraiseStopTime,"sunsetStartTime",sunsetStartTime);
+      dev["light_"+grow_box]["dayProcess"] = true;
+    }
+  }
+});
+
+defineRule("cron day timer", { //Просто задание, которое выполняется раз в сутки и меняет дату в переменных на текущую.
+  when: cron("01 00 00 * * *"),
+  then: function () {
+    setTimeVariable();
+  }
+});
+
+function string_to_time(srcString) { 
+  //log.info("string_to_time_"+grow_box, srcString)
+  var d = new Date();
+  var datetime = new Date(d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate()+'T' + srcString + 'Z');
+  datetime.setMinutes(datetime.getMinutes() + datetime.getTimezoneOffset());//Приведем к локальному:
+  return datetime; 
+};
+
+
+function setTimeVariable() { 
+  sunraiseStartTime = string_to_time(ps["sun_start_time"]); //Время начала "рассвета"
+  sunraiseStopTime = new Date(sunraiseStartTime);
+  sunraiseStopTime.setMinutes(sunraiseStopTime.getMinutes() + parseInt(ps["sun_start_duration"])); //окончание "рассвета"
+  sunsetStartTime = string_to_time(ps["sun_stop_time"]);//Время начала "заката"
+  sunsetStopTime = new Date(sunsetStartTime);
+  sunsetStopTime.setMinutes(sunsetStopTime.getMinutes() + parseInt(ps["sun_stop_duration"])); //окончание "заката"
+};
+
+
+defineRule("SunRaise_starter", { //название правила 
+whenChanged: "light_"+grow_box+"/sunraiseProcess", //При изменении переуключателя "рассвет"
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    log.info("light_"+grow_box+" sunraiseProcess function", newValue, devName, cellName); //Это лог.
+    if (newValue){ //Запускаем "рассвет"
+      dura = (sunraiseStopTime - sunraiseStartTime)/1000; //время в секундах
+      setPointLight = Number(ps["light_setpoint"]); // уставка освещенности
+      light_increment = setPointLight/dura; //увеличение освещенности в секунду расчетное
+      setPointLight = 1;
+	  log.info("light_"+grow_box+" sunraiseProcess", "dura", dura, "dimmer_increment", dimmer_increment); //Это лог.
+      startTicker(grow_box+"raiseTicker", 1000); //Запуск таймера, отрабатывает раз в секунду.
+    } else { //Останавливаем "рассвет"
+      timers[grow_box+"raiseTicker"].stop(); 
+      log.info("light_"+grow_box+"Ticker STOP sunraise");
+    }
+  }
+});
+
+defineRule("SunSet_starter", { //название правила 
+whenChanged: "light_"+grow_box+"/sunsetProcess", //При изменении переуключателя "Закат"
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    log.info("light_"+grow_box+" sunsetProcess function", newValue, devName, cellName); //Это лог.
+    if (newValue){ //Запускаем "закат"
+      dev["light_"+grow_box]["dayProcess"] = false;
+      setPointLight = Number(ps["light_setpoint"]); // уставка освещенности
+      dura = (sunsetStopTime - sunsetStartTime)/1000; //время в секундах
+      light_increment = -(setPointLight)/dura; //уменьшение освещения в секунду расчетное. От уставки!
+      //dev["light_"+grow_box+"/dayProcess"] = false; //Выключаем "день"
+	  log.info("light_"+grow_box+" sunsetProcess", "dura", dura, "light_increment", light_increment, "setPointLight", setPointLight); //Это лог.
+      startTicker(grow_box+"raiseTicker", 1000); //Запуск таймера, отрабатывает раз в секунду.
+    } else { //Останавливаем "закат"
+      timers[grow_box+"raiseTicker"].stop(); 
+      log.info("light_"+grow_box+"Ticker STOP sunset");
+      setPointLight = 0;
+      dev[dimmer_light] = dimmer_zeroValue;
+    }
+  }
+});
+
+
+defineRule("handmadeSunTicker", { // Таймер плавного рассвета/заката
+  when: function () { return timers[grow_box+"raiseTicker"].firing; },
+  then: function () {
+    setPointLight += light_increment;
+    if (setPointLight>Number(ps["light_setpoint"])){
+      log.info("light_"+grow_box+"raiseTicker STOP ON setPointLight");
+      dev["light_"+grow_box+"/sunraiseProcess"] = false; //Выключаем "рассвет" Таймер остановит правило "SunRaise_starter"
+    }
+    if (setPointLight<0){
+      log.info("light_"+grow_box+"setTicker STOP ON setPointLight");
+      dev["light_"+grow_box+"/sunsetProcess"] = false; //Выключаем "закат" Таймер остановит правило "SunSet_starter"
+    }
+    if ((dev["light_"+grow_box+"/Lamp power set"]>dimmer_maxValue)||(dev["light_"+grow_box+"/Lamp power set"]<dimmer_zeroValue)){
+      log.info("light_"+grow_box+"raiseTicker STOP ON Lamp power set");
+      dev["light_"+grow_box+"/sunraiseProcess"] = false; //Выключаем "рассвет" Таймер остановит правило "SunRaise_starter"
+      dev["light_"+grow_box+"/sunsetProcess"] = false; //Выключаем "закат" Таймер остановит правило "SunSet_starter"
+    }
+  }
+});
+
+

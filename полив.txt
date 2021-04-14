@@ -1,0 +1,160 @@
+//Pump1.js 
+//'use strict';
+var grow_box = "1"; // CHANGE_ME! имя устройства. Выводится в заголовок окна и служит для разделения устройств
+log.info("light_"+grow_box+"START######################"); //Это лог.
+
+var dimmer_relay = "wb-mr6cu_29/K6"; //CHANGE_ME! устройство-реле питания диммера (доработка, используемй диммер подтягивает свой вход к VCC)
+
+var ps = new PersistentStorage("storage_"+grow_box, {global: true});// Определим объект-хранилище.
+
+var pumpStartTime; //Время начала "рассвета"
+var pumpStopTime; //Время конца "рассвета"
+setTimeVariable();
+
+//Элементы виртуального устройства
+//управления
+var deviceCells = { 
+  
+  //Начало рассвета hh:mm
+  "Pump (start) time": {
+    type: "text",
+    readonly: false,
+    value: ps["pump_start_time"],
+  },
+  //Длительность рассвета
+  "Pump duration": {
+    type: "text",
+    readonly: false,
+    value: ps["sun_start_duration"],
+  },
+
+  pumpON : {
+          type : "switch",
+          value : false,
+  },   
+
+  pumpOFF : {
+          type : "switch",
+          value : false,
+  },
+};
+
+
+//Создадим виртуальное устройство и добавим в него элементы 
+  defineVirtualDevice("pump_"+grow_box, {
+    title:"Pump "+grow_box,
+    cells: deviceCells
+  });
+
+defineRule("Sunraise start time change", { //название правила 
+whenChanged: "pump_"+grow_box+"/Pump (start) time", //при изменении поля времени начала рассвета запишем его в хранилище
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    log.info("pump_"+grow_box+"/Pump start time ", newValue); //Это лог. Он попадает в /var/log/messages
+    ps["pump_start_time"] = newValue;
+    setTimeVariable();
+  }
+});
+
+defineRule("Sunraise duration change", { //название правила 
+whenChanged: "pump_"+grow_box+"/Pump duration", //при изменении поля времени начала рассвета запишем его в хранилище
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    log.info("pump_"+grow_box+"/Pump duration", newValue); //Это лог. Он попадает в /var/log/messages
+    ps["sun_start_duration"] = newValue;
+    setTimeVariable();
+  }
+});
+
+defineRule("dayProcess change", { //название правила 
+whenChanged: "pump_"+grow_box+"/pumpOFF", // Для режима "День"
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    if (newValue){ //Включаем "день"
+      dev["pump_"+grow_box+"/pumpON"] = false; //Выключаем "рассвет" Таймер остановит правило "SunRaise_starter"
+    }
+  }
+});
+
+defineRule("dayProcess change off", { //название правила 
+whenChanged: "pump_"+grow_box+"/pumpON", // Для режима "День"
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    if ((dev["pump_"+grow_box]["pumpON"] == true)){ //Включаем "день"
+      dev["pump_"+grow_box+"/pumpOFF"] = false; //Выключаем "рассвет" Таймер остановит правило "SunRaise_starter"
+    }
+  }
+});
+
+//*Дополнение для реле диммера
+
+defineRule("dimmer_relay_on", { //название правила 
+whenChanged: "pump_"+grow_box+"/pumpON", //При изменении мощности диммера - проверим и включим реле
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+  if ((dev["pump_"+grow_box]["pumpON"] == true)){ //Если диммер уже включен а реле выключено
+    dev[dimmer_relay] = true; //включаем реле
+  }
+}
+});  
+defineRule("dimmer_relay_off", { //название правила 
+whenChanged:"pump_"+grow_box+"/pumpON", //При изменении флага "закат" - проверим и выключим реле
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+   if ((dev["pump_"+grow_box]["pumpON"] == false)){ //Если диммер на минимуме а реле включено
+    dev[dimmer_relay] = false;
+  }
+}
+});
+
+//*Конец дополнения
+
+defineRule("cron minute timer", { //Просто задание, которое выполняется каждую минуту и взводит/опускает флаги "Рассвет", "Закат"
+  when: cron("00 * * * * *"),
+  then: function () {
+    //log.info(grow_box, "cron timer executed! DEBUG ONLY.");
+    d = new Date(); //Текущее время
+    //pumpStartTime
+    if ((dev["pump_"+grow_box]["pumpON"]==false) && (d > pumpStartTime) && (d<pumpStopTime)){
+      log.info(grow_box, "cron timer executed! Sunraise process START", "pumpStartTime",pumpStartTime,"pumpStopTime",pumpStopTime);
+      dev["pump_"+grow_box]["pumpON"] = true;
+    }
+    //dayProcess
+    if ((dev["pump_"+grow_box]["pumpOFF"]==false) && (d > pumpStopTime)){
+      log.info(grow_box, "cron timer executed! DAY process START","pumpStopTime",pumpStopTime);
+      dev["pump_"+grow_box]["pumpOFF"] = true;
+    }
+  }
+});
+
+defineRule("cron day timer", { //Просто задание, которое выполняется раз в сутки и меняет дату в переменных на текущую.
+  when: cron("01 00 00 * * *"),
+  then: function () {
+    setTimeVariable();
+  }
+});
+
+function string_to_time(srcString) { 
+  //log.info("string_to_time_"+grow_box, srcString)
+  var d = new Date();
+  var datetime = new Date(d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate()+'T' + srcString + 'Z');
+  datetime.setMinutes(datetime.getMinutes() + datetime.getTimezoneOffset());//Приведем к локальному:
+  return datetime; 
+};
+
+
+function setTimeVariable() { 
+  pumpStartTime = string_to_time(ps["pump_start_time"]); //Время начала "рассвета"
+  pumpStopTime = new Date(pumpStartTime);
+  pumpStopTime.setMinutes(pumpStopTime.getMinutes() + parseInt(ps["sun_start_duration"])); //окончание "рассвета"
+};
+
+
+defineRule("SunRaise_starter", { //название правила 
+whenChanged: "pump_"+grow_box+"/pumpON", //При изменении переуключателя "рассвет"
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    log.info("pump_"+grow_box+" pumpON function", newValue, devName, cellName); //Это лог.
+    if (newValue){ //Запускаем "рассвет"
+      dura = (pumpStopTime - pumpStartTime)/1000; //время в секундах
+	  log.info("pump_"+grow_box+" pumpON", "dura", dura); //Это лог.
+      startTicker(grow_box+"raiseTicker", 1000); //Запуск таймера, отрабатывает раз в секунду.
+    } else { //Останавливаем "рассвет"
+      timers[grow_box+"raiseTicker"].stop(); 
+      log.info("pump_"+grow_box+"Ticker STOP sunraise");
+    }
+  }
+});

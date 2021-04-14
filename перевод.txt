@@ -1,0 +1,31 @@
+//light_conversion.js
+var sensor_light = "wb-msw-v3_33/Illuminance"; // CHANGE_ME! устройство-датчик освещенности
+
+
+defineVirtualDevice("light_conversion", {
+  title: "light_conversion",
+  cells: {  
+   	light_as_is: { 
+           type: "text",
+           value: "0"
+    },
+    light_converted: { 
+           type: "text",
+           value: "0"
+    },
+    light: { 
+           type: "text",
+           value: "0"
+    },
+  },
+});
+
+defineRule("convert", { //название правила
+  whenChanged: sensor_light, //при изменении состояния
+  then: function (newValue, devName, cellName) { //выполняй следующие действия
+    newValue = Number(newValue); //Приведем к числу
+    dev["light_conversion/light_as_is"] = newValue.toString(); //выведем "как есть" приведя к строке
+    dev["light_conversion/light_converted"] = (newValue/18.06).toString();//выведем преобразованное как угодно. И выводим приведя к строке
+    dev["light_conversion/light"] =Math.round(newValue/18.06).toString();
+  }
+});
