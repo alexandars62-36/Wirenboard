@@ -1,1 +1,2 @@
 # Wirenboard
+Hello. These text files are javascript logic for performing daylight hours for the wirenboard controller. This logic allows you to set the start time of dawn, the duration of the dawn, the duration of daylight hours, the beginning and duration of the sunset. There is also a static and dynamic script. The static scenario keeps the irradiance level constant, which you give it. The dynamic scenario allows you to automatically adjust the irradiance level relative to the one you specified, correcting for the luminous flux from the sun through the light sensor.
